@@ -1,0 +1,6 @@
+{
+  "name": "WigglePay — Apple HIG Stellar Payment Suite",
+  "description": "Apple Human Interface Guidelines UI/UX design system and interactive multi-surface Stellar payment gateway featuring an Embeddable Checkout Widget, macOS Merchant Portal, Dynamic Island OBS Overlay, and iOS Telegram Voice-to-Invoice Mini-App.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
