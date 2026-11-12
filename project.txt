@@ -1,0 +1,383 @@
+System Architecture Proposal: WigglePay
+
+1. Executive Summary & High-Level Topology
+
+WigglePay is a Stellar-powered payment gateway enabling decentralized, low-cost settlement for internet businesses, creators, and social-first merchants. The platform bridges three distinct environments:
+Merchant Portal & Embedded Widgets (React): Designed for e-commerce sites, custom web apps, and live stream overlays.
+
+AI-Driven Telegram Interface: Facilitates conversational invoice creation via voice notes and natural language prompts.
+Stellar Settlement Layer: Leverages Stellar Horizon, Path Payments, and Multiplexed Accounts (M-addresses) / unique transaction memos for frictionless, non-custodial or managed settlements.
+
+
+                   +------------------------+
+                   |  Merchant / End User   |
+                   +-----------+------------+
+                               |
+       +-----------------------+------------------------+
+       |                       |                        |
+       v                       v                        v
++--------------+      +-----------------+      +------------------+
+| React Portal |      | Embedded Widget |      | Telegram Client  |
+|  (Merchant)  |      | / OBS Overlay   |      | (Voice/Text Msg) |
++-------+------+      +--------+--------+      +--------+---------+
+        |                      |                        |
+        | HTTPS/WSS            | HTTPS/WSS              | Telegram Bot API
+        |                      |                        |
+        v                      v                        v
++-----------------------------------------------------------------+
+|                       NGINX Reverse Proxy                       |
++-----------------------------------------------------------------+
+                               |
+                               v
++-----------------------------------------------------------------+
+|               Django REST Framework API Gateway                 |
+|  - Auth & Merchant Accounts      - Widget Configuration Engine   |
+|  - Invoice Management & State    - Webhook Dispatcher Engine    |
+|  - Telegram Webhook Handler      - Realtime (Channels/WSS)      |
++-------------+-------------------------------+-------------------+
+              |                               |
+       Tasks  v                        Data   v
++-------------+-------------+    +------------+-----------+
+|      Redis Broker         |    | PostgreSQL Database    |
+|  - Celery Queues          |    | - Merchants, Invoices, |
+|  - WebSocket Pub/Sub      |    |   Transactions, Keys   |
++-------------+-------------+    +------------------------+
+              |
+              +-------------------------------+
+              |                               |
+              v                               v
++---------------------------+   +-------------------------------+
+|      Celery Workers       |   |   Stellar Horizon Daemon      |
+| - AI Pipeline (Audio/LLM) |   | - SSE Stream Transaction Feed |
+| - Webhook Dispatches      |   | - Payment Verification        |
+| - Notifications (TG/Mail) |   | - Account Reconciliation      |
++-------------+-------------+   +---------------+---------------+
+              |                                 |
+              v                                 v
++---------------------------+   +-------------------------------+
+| External AI Providers     |   | Stellar Network               |
+| (Whisper STT + LLM Parser)|   | (Horizon API / Soroban RPC)   |
++---------------------------+   +-------------------------------+
+
+2. Stellar Settlement Infrastructure
+
+2.1 Deposit Attribution Engine
+
+Because opening a dedicated Stellar account per invoice incurs base reserve overhead (minimum account balance in XLM), WigglePay uses Attribution via Multiplexed Accounts (MED25519) and fallback 64-bit Memo IDs:
+
+Multiplexed Account Routing: WigglePay generates an M-address encoding the merchant’s base account and a unique 64-bit Invoice Sub-ID.
+Memo Fallback: For wallets lacking multiplexed support, an explicit Memo-Text or Memo-ID is assigned and strictly validated.
+Asset Scope: Supports native XLM, standard stablecoins (e.g., USDC issued by Centre/Circle on Stellar), and platform-custom merchant loyalty tokens.
+Path Payments: Incorporates Stellar Path Payments so payers can settle using arbitrary assets (e.g., native XLM) while the merchant receives their desired asset (e.g., USDC), resolved at the protocol level through the Stellar Decentralized Exchange (SDEX).
+
+2.2 Payment Listener Architecture
+
+A dedicated, long-running daemon process continuously monitors the Stellar Horizon streaming endpoint (/accounts/{account_id}/payments via Server-Sent Events):
+
+Event Ingestion: Horizon SSE pushes incoming transaction envelopes in real time.
+Idempotency Gate: Hashes transaction identifiers (tx_hash) into Redis using an atomic lock to eliminate double-crediting.
+Ledger Validation: The daemon extracts the destination address, asset, amount, and memo/multiplexed ID, cross-referencing open invoices.
+State Transition: The invoice status transitions from PENDING to SETTLED. A signal emitted across Redis Pub/Sub triggers:
+WebSocket broadcast to the React payment modal.
+Live stream overlay triggers (audio alerts, on-screen animations).
+Instant Telegram notification sent back to the merchant.
+Outbound HTTP Webhooks dispatched to the merchant's endpoint.
+
+3. Backend Architecture (Django & DRF)
+
+3.1 Core Domain Models
+
+Merchant: Stores Stellar public keys (destination accounts), webhook URLs, signing secrets, commission rates, and widget configurations.
+Invoice: Contains UUID, merchant pointer, asset code, expected amount, settled amount, memo identifier, multiplexed address, status (DRAFT, PENDING, SETTLED, EXPIRED, CANCELLED), and expiry timestamp.
+WidgetConfig: Manages display options, custom input fields (payer name, message, tip presets), webhook mappings, and live stream overlays.
+TransactionRecord: Logs Stellar transaction hash, ledger index, sender address, gas fee paid, and routing path.
+TelegramProfile: Maps merchant foreign keys, Telegram chat IDs, authorization levels, and conversational state context.
+
+3.2 Asynchronous Worker Topology (Celery + Redis)
+
+Queue 1 (stellar_queue): Handles high-priority ledger verification, path payment calculations, and transaction validation.
+Queue 2 (ai_queue): Executes audio decoding, voice note speech-to-text processing, and LLM structured information extraction.
+Queue 3 (webhook_queue): Dispatches merchant notifications using exponential backoff and HMAC-SHA256 request signatures.
+
+3.3 Containerized Architecture (Docker Composition)
+
+The deployment is split into distinct, single-responsibility containers configured via Docker Compose:
+
+
+version: '3.9'
+
+services:
+  web:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    command: gunicorn wigglepay.wsgi:application --bind 0.0.0.0:8000 --workers 4
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+
+  channels:
+    build: ./backend
+    command: daphne -b 0.0.0.0 -p 8001 wigglepay.asgi:application
+    env_file: .env
+    depends_on:
+      - redis
+
+  celery_worker:
+    build: ./backend
+    command: celery -A wigglepay worker -l info -Q stellar_queue,ai_queue,webhook_queue -c 4
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+
+  celery_beat:
+    build: ./backend
+    command: celery -A wigglepay beat -l info
+    env_file: .env
+    depends_on:
+      - redis
+
+  stellar_daemon:
+    build: ./backend
+    command: python manage.py listen_horizon_stream
+    env_file: .env
+    restart: always
+    depends_on:
+      - redis
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env_file: .env
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "3000:3000"
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - static_volume:/var/www/static
+      - media_volume:/var/www/media
+    depends_on:
+      - web
+      - channels
+      - frontend
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume:
+
+4. AI-Powered Telegram Bot Flow
+4.1 Input Ingestion & Voice Pipeline
+4.1 Input Ingestion & Voice Pipeline
+
+
+[User Voice Note (.ogg)] 
+       │ 
+       ▼
+[Telegram Bot Gateway] ──> [Celery Task] ──> [FFmpeg transcode to WAV/MP3]
+                                                        │
+                                                        ▼
+                                             [Whisper Audio Model]
+                                                        │
+                                                        ▼
+                                            [Raw Transcript String]
+
+4.2 Conversational Entity Extraction Engine
+
+The transcribed text (or direct chat message) is processed through an LLM parser configured for structured JSON output.
+
+Example Parsing Pipeline
+Incoming Input:
+"Create an invoice for 50 USDC for 2 pairs of vintage shoes from user @alex"
+System Prompt:
+You are WigglePay's settlement parser. Extract payment attributes from the input text into strict JSON matching this schema:
+{
+  "amount": float,
+  "asset": string (XLM or USDC default),
+  "customer_ref": string or null,
+  "description": string,
+  "expiry_hours": integer (default 24)
+}
+Structured JSON Output:
+{
+  "amount": 50.00,
+  "asset": "USDC",
+  "customer_ref": "@alex",
+  "description": "2 pairs of vintage shoes",
+  "expiry_hours": 24
+}
+
+4.3 Bot Interactive Flow
+
+Receipt & Acknowledgment: Merchant sends a voice note (e.g., "Bill Sarah 120 XLM for graphic design work").
+Processing State: The bot replies immediately with a Telegram chat action indicator (record_voice / typing).
+Review Card: The bot renders a confirmation card using Telegram Inline Keyboards displaying amount, description, and recipient with action buttons ([Confirm & Generate Link], [Edit], [Cancel]).
+Execution: Upon confirmation, Celery provisions the Invoice record with a unique memo/M-address and returns a deep-link, Telegram WebApp Mini-App button, and dynamic QR code.
+Real-Time Settlement Alert: When payment is confirmed on the Stellar network, the bot delivers an instant push notification containing full transaction metadata.
+
+5. Embeddable Widget & Live Stream System
+
+5.1 Web Component / iFrame Engine
+
+Lightweight Script Injection: Merchants integrate WigglePay via a single script tag:
+<script src="https://cdn.wigglepay.io/widget.js" 
+        data-wiggle-key="pub_live_79a8bc123" 
+        data-amount="25" 
+        data-asset="USDC" 
+        data-memo="Donation" 
+        data-theme="system"></script>
+Modal vs. Inline Architecture: Generates an encapsulated Shadow DOM or secure sandboxed iframe to prevent CSS style leaking and protect against script injection vulnerabilities.
+Web3 Wallet Bridge: Interfaces with popular Stellar browser extensions (Freighter, Albedo, xBull) via @stellar/freighter-api for one-click payment signing.
+
+5.2 Real-Time Live Stream Overlay (OBS Engine)
+
+Overlay Route: https://wigglepay.io/overlay/{overlay_token} explicitly styled and optimized for OBS Browser Sources.
+WebSocket Connection: Connects directly to Django Channels at wss://api.wigglepay.io/ws/overlays/{overlay_token}/.
+Trigger Pipeline: When a payment is settled, Channels broadcasts payload parameters (e.g., amount, asset, donor, message) to invoke on-screen animations and Text-To-Speech audio.
+
+6. Screen Flow & Navigation Architecture
+
+6.1 Merchant Portal Navigation
+[Landing Page] ──> [Merchant Auth]
+                         │
+                         ├──> [Main Dashboard / Metrics]
+                         │         ├── Total Volume (XLM/USDC)
+                         │         ├── Active Invoices Table
+                         │         └── Recent Settlements
+                         │
+                         ├──> [Invoice Generator (Web Form)]
+                         │         └── Live Preview -> Share Link Generated
+                         │
+                         ├──> [Widget Builder]
+                         │         ├── Layout Selector (Modal, Inline, Button-Only)
+                         │         ├── Asset & Tip Presets
+                         │         └── Embed Code Generator (Copy/Paste)
+                         │
+                         ├──> [Streamer Overlay Studio]
+                         │         ├── Animation & Sound Triggers
+                         │         ├── Minimum Tip Thresholds
+                         │         └── Browser Source URL Copy
+                         │
+                         └──> [Settings & Keys]
+                                   ├── Stellar Payout Address Config
+                                   ├── API Keys (Read/Write Secret Keys)
+                                   └── Webhook Endpoints & Delivery Logs
+
+6.2 Payer Checkout Journey
+[Open Invoice Link / Click Widget]
+             │
+             ▼
+[Step 1: Selection & Input]
+  - Amount selection (or pre-filled)
+  - Asset choice (USDC, XLM)
+  - Optional donor message / metadata
+             │
+             ▼
+[Step 2: Payment Execution]
+  - Path A: Desktop/Mobile Extension (Freighter One-Click Sign)
+  - Path B: QR Code + Copyable Address + Explicit Memo
+  - Real-time countdown timer (validity window)
+             │
+             ▼
+[Step 3: Verification State]
+  - Polling / WebSocket listener displays animated state change
+             │
+             ▼
+[Step 4: Success & Receipt]
+  - Confirmed Ledger Proof + Transaction Hash link to Stellar Expert
+  - Redirect callback to Merchant site (if configured)
+
+7. UI/UX Architecture
+
+Note: The following architectural specifications define layout structures, typography hierarchy, responsive breakpoints, and interaction rules without enforcing strict visual color palettes.
+
+7.1 Merchant Dashboard Layout Frame
++-------------------------------------------------------------------------------+--------------+
+| TOP BAR: Organization Selector | Search | Network Status (Mainnet)            | User Profile |
++------------------+------------------------------------------------------------+--------------+
+| SIDEBAR NAV      | MAIN WORKSPACE                                                            |
+|                  |                                                                           |
+| - Overview       | [ METRIC CARDS ROW: 4 Columns ]                                           |
+| - Invoices       | [Gross Volume] [Active Invoices] [Average Size] [Settled %]               |
+| - Payment Links  |                                                                           |
+| - Live Widgets   | [ TABULAR VIEW: Real-time Invoices ]                                      |
+| - Stream Overlay | Search, Filter by Asset, Date Range, Status                               |
+| - Webhooks       | +-----------------------------------------------------------------------+ |
+| - Settings       | | ID | Customer | Asset | Amount | Created | Status | Link                | |
+|                  | +----+----------+-------+--------+---------+--------+---------------------+ |
+|                  | | Row entries with fixed typography / mono-spaced numerical values       | |
+|                  | +-----------------------------------------------------------------------+ |
++------------------+---------------------------------------------------------------------------+
+
+
+7.2 Embeddable Widget Layout Architecture
+
+Container Components & Styling Rules
+
+Container: Fixed dimension container (max-width 420px) with automatic vertical centering.
+Top Header: Displays merchant avatar/branding lockup, payment title, and active currency selector.
+Body Area: Segmented toggle switching between Direct Wallet Connect (Freighter/Albedo) and Manual Transfer (QR Code + Address/Memo).
+Dynamic Display: Monospace typography for public Stellar keys and M-addresses with quick-copy actions.
+Action Footer: Primary full-width CTA button alongside platform trust badge ("Powered by Stellar Network").
+
+Responsive Breakpoints
+
+Small (< 480px): Full-viewport bottom sheet; touch targets expand to minimum 48px.
+Desktop (> 768px): Centered floating dialog with animated modal transitions.
+
+Interaction & State Machine Transitions
+
+IDLE: Displays invoice details and asset requirements.
+SIGNING: Disables controls and presents visual indicators waiting for wallet signature.
+BROADCASTING: Displays pulsing progression state indicating ledger ingestion.
+SUCCESS: Transitions to checkmark view with transaction proof link.
+ERROR / EXPIRED: Presents explicit error details with a quick "Regenerate Invoice" action.
+8. Security, Fault Tolerance, & System Features
+8. Security, Fault Tolerance, and Value-Add Specifications
+8.1 Transaction Security & Replay Prevention
+8.1 Transaction Security & Replay Prevention
+
+Replay Protection: Enforces a database uniqueness constraint on TransactionRecord.tx_hash. The Horizon listener automatically rejects previously credited hashes.
+Underpayment & Overpayment Handling:
+Underpayment: Invoice transitions to PARTIALLY_PAID; widget prompts for remaining balance.
+Overpayment: Invoice marked SETTLED; excess balance is credited with an automated refund flag.
+8.2 API Developer Experience
+8.2 API Developer Experience
+
+HMAC Request Signatures: Every outbound webhook payload is signed using SHA256 HMAC in the X-WigglePay-Signature header.
+REST Endpoints for Integrations:
+POST /api/v1/invoices/: Programmatic invoice creation.
+GET /api/v1/invoices/{id}/: Invoice query and settlement status verification.
+POST /api/v1/widgets/: Remote configuration of embedded payment links.
+8.3 Value-Add System Features
+8.3 Value-Add Architecture Features
+
+Dynamic Slippage Management for Path Payments: The widget queries real-time conversion quotes from Horizon APIs, locking price guarantees for 60 seconds to protect against asset volatility during payment execution.
+Zero-Config OBS Alerts: Streamers paste a single URL into OBS Studio; configuration edits instantly update live overlay layouts via WebSockets without requiring broadcast restarts.
+Automated Payout Splitting (Soroban Extension): Future-proof smart contract integration permitting secondary routing (e.g., 95% merchant payout, 5% platform fee) via non-custodial Soroban escrow contracts.
