@@ -239,3 +239,15 @@
     background-color: var(--apple-bg-primary) !important;
   }
 }
+
+/* Landing Page Typography & Glow Utilities */
+.font-onest {
+  font-family: 'Onest', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.font-anton {
+  font-family: 'Anton', sans-serif;
+}
+.font-redhat {
+  font-family: 'Red Hat Mono', monospace;
+}
+

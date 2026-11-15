@@ -98,12 +98,22 @@ class Invoice(models.Model):
     def is_expired(self) -> bool:
         return timezone.now() > self.expires_at and self.status == InvoiceStatus.PENDING
 
+    @property
+    def total_items_count(self) -> int:
+        return sum(item.quantity for item in self.items.all())
+
     def mark_settled(self, settled_amount: Decimal, tx_hash: str, sender: str = ''):
         """Transition invoice to SETTLED and trigger real-time dispatches."""
         self.status = InvoiceStatus.SETTLED
         self.settled_amount = settled_amount
         self.settled_at = timezone.now()
         self.save(update_fields=['status', 'settled_amount', 'settled_at', 'updated_at'])
+
+        # Automatically decrement inventory stock for tracked products
+        for item in self.items.select_related('product').all():
+            if item.product and item.product.track_stock:
+                item.product.stock_quantity = max(0, item.product.stock_quantity - item.quantity)
+                item.product.save(update_fields=['stock_quantity', 'updated_at'])
 
         # Broadcast via WebSockets & trigger Celery tasks
         try:
@@ -130,3 +140,34 @@ class Invoice(models.Model):
     def __str__(self):
         return f"Invoice {self.id} - {self.expected_amount} {self.asset_code} [{self.status}]"
 
+
+class InvoiceItem(models.Model):
+    """
+    Individual line item in a payable invoice, referencing an inventory product or custom item.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(
+        'inventory.Product',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invoice_items'
+    )
+    title = models.CharField(max_length=255, help_text="Product or item title at time of invoicing")
+    quantity = models.PositiveIntegerField(default=1)
+    unit_price = models.DecimalField(max_digits=18, decimal_places=4)
+    total_price = models.DecimalField(max_digits=18, decimal_places=4)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def save(self, *args, **kwargs):
+        if not self.total_price:
+            self.total_price = Decimal(str(self.quantity)) * Decimal(str(self.unit_price))
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.quantity}x {self.title} ({self.total_price})"

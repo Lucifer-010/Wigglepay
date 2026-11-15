@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     # WigglePay Internal Apps
     'apps.core',
     'apps.merchants',
+    'apps.inventory',
     'apps.invoices',
     'apps.transactions',
     'apps.widgets',
@@ -163,6 +164,7 @@ SPECTACULAR_SETTINGS = {
     'COMPONENT_SPLIT_REQUEST': True,
     'TAGS': [
         {'name': 'Merchants', 'description': 'Merchant accounts, API keys & payout settings'},
+        {'name': 'Inventory', 'description': 'Product categories, shelves, pricing and stock management'},
         {'name': 'Invoices', 'description': 'Deposit attribution, memos, M-addresses, quotes & settlement state'},
         {'name': 'Transactions', 'description': 'Ledger records, replay protection & verification proofs'},
         {'name': 'Widgets', 'description': 'Embeddable checkout widgets & OBS stream overlay configuration'},

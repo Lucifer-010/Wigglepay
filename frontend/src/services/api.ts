@@ -3,6 +3,56 @@
  * Connects React UI to the Django REST Framework backend & Daphne WebSockets
  */
 
+export interface ApiInvoiceItem {
+  id: string;
+  product: string | null;
+  product_id?: string;
+  product_sku?: string;
+  product_image_url?: string | null;
+  title: string;
+  quantity: number;
+  unit_price: string;
+  total_price: string;
+  metadata?: Record<string, any>;
+  created_at: string;
+}
+
+export interface ApiCategory {
+  id: string;
+  merchant: string;
+  name: string;
+  slug: string;
+  icon: string;
+  color: string;
+  description: string;
+  display_order: number;
+  is_active: boolean;
+  products_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiProduct {
+  id: string;
+  merchant: string;
+  category: string;
+  category_name?: string;
+  category_color?: string;
+  title: string;
+  sku: string;
+  description: string;
+  price: string;
+  currency: string;
+  stock_quantity: number;
+  track_stock: boolean;
+  is_in_stock: boolean;
+  image_url: string | null;
+  badge: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ApiInvoice {
   id: string;
   merchant: string;
@@ -24,6 +74,9 @@ export interface ApiInvoice {
   checkout_url: string;
   deep_link: string;
   qr_svg_url: string;
+  items?: ApiInvoiceItem[];
+  items_count?: number;
+  metadata?: Record<string, any>;
   created_at: string;
 }
 
@@ -72,6 +125,12 @@ export class WigglePayApi {
     asset_code: string;
     expected_amount: number;
     expiry_hours?: number;
+    items?: Array<{
+      product_id?: string;
+      title?: string;
+      quantity: number;
+      unit_price?: number;
+    }>;
   }): Promise<ApiInvoice | null> {
     try {
       const res = await fetch(`${BASE_URL}/api/v1/invoices/`, {
@@ -86,6 +145,124 @@ export class WigglePayApi {
       return await res.json();
     } catch (err) {
       console.error('Invoice creation API call failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch inventory categories (shelves)
+   */
+  static async getCategories(): Promise<ApiCategory[]> {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/inventory/categories/`, {
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!res.ok) throw new Error(`Category fetch error: ${res.statusText}`);
+      const data = await res.json();
+      return data.results || data;
+    } catch (err) {
+      console.warn('Backend categories unavailable:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Create inventory category (shelf)
+   */
+  static async createCategory(payload: {
+    name: string;
+    icon?: string;
+    color?: string;
+    description?: string;
+    display_order?: number;
+  }): Promise<ApiCategory | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/inventory/categories/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`Failed to create category: ${res.statusText}`);
+      return await res.json();
+    } catch (err) {
+      console.error('Category creation API call failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch inventory products
+   */
+  static async getProducts(params?: { category?: string; is_active?: boolean }): Promise<ApiProduct[]> {
+    try {
+      const url = new URL('/api/v1/inventory/products/', BASE_URL);
+      if (params?.category) url.searchParams.set('category', params.category);
+      if (params?.is_active !== undefined) url.searchParams.set('is_active', String(params.is_active));
+
+      const res = await fetch(url.toString(), {
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!res.ok) throw new Error(`Products fetch error: ${res.statusText}`);
+      const data = await res.json();
+      return data.results || data;
+    } catch (err) {
+      console.warn('Backend products unavailable:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Create inventory product
+   */
+  static async createProduct(payload: {
+    category: string;
+    title: string;
+    sku?: string;
+    description?: string;
+    price: number;
+    currency?: string;
+    stock_quantity?: number;
+    track_stock?: boolean;
+    image_url?: string;
+    badge?: string;
+  }): Promise<ApiProduct | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/inventory/products/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`Failed to create product: ${res.statusText}`);
+      return await res.json();
+    } catch (err) {
+      console.error('Product creation API call failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Adjust product stock quantity
+   */
+  static async adjustProductStock(productId: string, adjustment: number): Promise<ApiProduct | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/inventory/products/${productId}/adjust_stock/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ adjustment }),
+      });
+      if (!res.ok) throw new Error(`Adjust stock failed: ${res.statusText}`);
+      return await res.json();
+    } catch (err) {
+      console.error('Stock adjustment API call failed:', err);
       return null;
     }
   }

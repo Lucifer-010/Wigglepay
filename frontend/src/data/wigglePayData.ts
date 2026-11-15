@@ -1,8 +1,13 @@
 export type AssetType = 'USDC' | 'XLM' | 'USDT';
 export type InvoiceStatus = 'Active' | 'Settled' | 'Expired';
 export type UnifiedNavId =
+  | 'landing'
+  | 'login'
+  | 'signup'
   | 'overview'
+  | 'create-invoice'
   | 'invoices'
+  | 'inventory'
   | 'tiplinks'
   | 'embedcode'
   | 'widget'
@@ -13,9 +18,52 @@ export type UnifiedNavId =
   | 'settings';
 
 export type EnvironmentSurface = 'portal' | 'widget' | 'overlay' | 'telegram' | 'specs';
-export type PortalSection = 'overview' | 'invoices' | 'widgets' | 'overlays' | 'webhooks' | 'settings';
+export type PortalSection = 'overview' | 'invoices' | 'inventory' | 'create-invoice' | 'widgets' | 'overlays' | 'webhooks' | 'settings';
 export type WidgetVisualTheme = 'Light' | 'Dark' | 'Midnight' | 'Cyber';
 export type BannerStylePreset = 'violet-gradient' | 'crimson-aurora' | 'emerald-mesh';
+
+export interface InvoiceItem {
+  id: string;
+  productId?: string;
+  productSku?: string;
+  title: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  imageUrl?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface InventoryCategory {
+  id: string;
+  name: string;
+  slug: string;
+  icon: string;
+  color: string;
+  description?: string;
+  display_order: number;
+  is_active: boolean;
+  products_count?: number;
+}
+
+export interface InventoryProduct {
+  id: string;
+  categoryId: string;
+  categoryName: string;
+  categoryColor?: string;
+  title: string;
+  sku: string;
+  description: string;
+  price: number;
+  currency: AssetType;
+  stockQuantity: number;
+  trackStock: boolean;
+  isInStock: boolean;
+  imageUrl?: string;
+  badge?: string;
+  isActive: boolean;
+  createdAt?: string;
+}
 
 export interface Invoice {
   id: string;
@@ -35,6 +83,7 @@ export interface Invoice {
   txHash?: string;
   ledgerIndex?: number;
   feeSavedUsd: number;
+  items?: InvoiceItem[];
 }
 
 export interface TipLinkCard {
@@ -200,6 +249,175 @@ export function generateStellarTxHash(): string {
   return hash;
 }
 
+export const INITIAL_CATEGORIES: InventoryCategory[] = [
+  {
+    id: 'cat-digital',
+    name: 'Digital Assets & Code',
+    slug: 'digital-assets',
+    icon: 'Code2',
+    color: '#007AFF',
+    description: 'Design kits, developer tools, license keys and icon packs',
+    display_order: 1,
+    is_active: true,
+    products_count: 2,
+  },
+  {
+    id: 'cat-hardware',
+    name: 'Hardware & Creator Rig',
+    slug: 'hardware-rig',
+    icon: 'Radio',
+    color: '#FF9500',
+    description: 'OBS stream gear, audio interfaces and studio hardware',
+    display_order: 2,
+    is_active: true,
+    products_count: 1,
+  },
+  {
+    id: 'cat-services',
+    name: 'Advisory & Workshops',
+    slug: 'services-workshops',
+    icon: 'Sparkles',
+    color: '#AF52DE',
+    description: '1-on-1 architecture review, Soroban contract audits, and HIG masterclasses',
+    display_order: 3,
+    is_active: true,
+    products_count: 2,
+  },
+  {
+    id: 'cat-merch',
+    name: 'Apparel & Physical Merch',
+    slug: 'apparel-merch',
+    icon: 'Package',
+    color: '#34C759',
+    description: 'Limited edition creator apparel, hoodies, and accessories',
+    display_order: 4,
+    is_active: true,
+    products_count: 2,
+  },
+];
+
+export const INITIAL_PRODUCTS: InventoryProduct[] = [
+  {
+    id: 'f2f53b8f-557f-4399-a1fd-eb7be06fbdf3',
+    categoryId: 'cat-digital',
+    categoryName: 'Digital Assets & Code',
+    categoryColor: '#007AFF',
+    title: 'macOS Iconography Pack 2026',
+    sku: 'DIG-MAC-01',
+    description: '500+ handcrafted retina icons in SF Symbols & Sonoma aesthetic with vector sources',
+    price: 45.0,
+    currency: 'USDC',
+    stockQuantity: 997,
+    trackStock: true,
+    isInStock: true,
+    badge: 'Popular',
+    isActive: true,
+    createdAt: 'Today',
+  },
+  {
+    id: 'prod-swiftui-kit',
+    categoryId: 'cat-digital',
+    categoryName: 'Digital Assets & Code',
+    categoryColor: '#007AFF',
+    title: 'SwiftUI Component Kit Pro',
+    sku: 'DIG-SWIFT-02',
+    description: 'Production-ready iOS 18 & macOS Sequoia modular SwiftUI views with tactile animations',
+    price: 85.0,
+    currency: 'USDC',
+    stockQuantity: 500,
+    trackStock: true,
+    isInStock: true,
+    badge: 'New',
+    isActive: true,
+    createdAt: 'Yesterday',
+  },
+  {
+    id: 'prod-obs-rig',
+    categoryId: 'cat-hardware',
+    categoryName: 'Hardware & Creator Rig',
+    categoryColor: '#FF9500',
+    title: 'Spatial Audio OBS Mic Rig',
+    sku: 'HW-MIC-01',
+    description: 'Dual condenser microphone array calibrated for OBS Studio Dynamic Island sound alerts',
+    price: 420.0,
+    currency: 'XLM',
+    stockQuantity: 18,
+    trackStock: true,
+    isInStock: true,
+    badge: 'Limited',
+    isActive: true,
+    createdAt: '3 days ago',
+  },
+  {
+    id: 'prod-hig-audit',
+    categoryId: 'cat-services',
+    categoryName: 'Advisory & Workshops',
+    categoryColor: '#AF52DE',
+    title: 'HIG Design Audit & Retainer',
+    sku: 'SRV-HIG-01',
+    description: '2-hour deep dive review of your app design against Apple Human Interface Guidelines',
+    price: 240.0,
+    currency: 'USDC',
+    stockQuantity: 12,
+    trackStock: true,
+    isInStock: true,
+    badge: 'High Demand',
+    isActive: true,
+    createdAt: 'Nov 10',
+  },
+  {
+    id: 'prod-soroban-audit',
+    categoryId: 'cat-services',
+    categoryName: 'Advisory & Workshops',
+    categoryColor: '#AF52DE',
+    title: 'Soroban Smart Contract Audit',
+    sku: 'SRV-SOR-01',
+    description: 'Complete security verification, invariant testing, and fee split optimization for Soroban contracts',
+    price: 1250.0,
+    currency: 'USDC',
+    stockQuantity: 4,
+    trackStock: true,
+    isInStock: true,
+    badge: 'Enterprise',
+    isActive: true,
+    createdAt: 'Nov 08',
+  },
+  {
+    id: 'prod-vintage-shoes',
+    categoryId: 'cat-merch',
+    categoryName: 'Apparel & Physical Merch',
+    categoryColor: '#34C759',
+    title: 'Vintage Minimalist Sneakers',
+    sku: 'APP-SNK-01',
+    description: 'Handcrafted low-top sneakers in organic off-white canvas with vulcanized soles',
+    price: 90.0,
+    currency: 'XLM',
+    stockQuantity: 32,
+    trackStock: true,
+    isInStock: true,
+    badge: 'Trending',
+    isActive: true,
+    createdAt: 'Nov 09',
+  },
+  {
+    id: 'prod-hoodie-onyx',
+    categoryId: 'cat-merch',
+    categoryName: 'Apparel & Physical Merch',
+    categoryColor: '#34C759',
+    title: 'WigglePay Heavyweight Hoodie (Onyx)',
+    sku: 'APP-HD-02',
+    description: '450 GSM French Terry cotton hoodie with embossed micro-Stellar spark insignia',
+    price: 65.0,
+    currency: 'USDC',
+    stockQuantity: 74,
+    trackStock: true,
+    isInStock: true,
+    badge: 'New',
+    isActive: true,
+    createdAt: 'Nov 11',
+  },
+];
+
 export const INITIAL_INVOICES: Invoice[] = [
   {
     id: 'INV-9048',
@@ -210,13 +428,24 @@ export const INITIAL_INVOICES: Invoice[] = [
     multiplexedAddress: 'MAQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4AAAAK7PQ2M',
     baseAddress: MERCHANT_IDENTITY.baseStellarAccount,
     memoId: '9048271649201842',
-    description: 'Pro Shader Pack v4 · Direct Paylink',
+    description: 'macOS Iconography Pack 2026',
     paylinkSlug: '?widget=main',
     status: 'Active',
     createdAt: 'Nov 12, 20:18',
     timestampMs: Date.now() - 2 * 60 * 1000,
     expiryHours: 24,
     feeSavedUsd: 1.61,
+    items: [
+      {
+        id: 'item-inv-9048-1',
+        productId: 'f2f53b8f-557f-4399-a1fd-eb7be06fbdf3',
+        productSku: 'DIG-MAC-01',
+        title: 'macOS Iconography Pack 2026',
+        quantity: 1,
+        unitPrice: 45.0,
+        totalPrice: 45.0,
+      },
+    ],
   },
   {
     id: 'INV-9047',

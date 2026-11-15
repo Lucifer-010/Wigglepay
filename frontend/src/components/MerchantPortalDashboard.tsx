@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  Package,
 } from 'lucide-react';
 import {
   Invoice,
@@ -51,6 +52,8 @@ interface MerchantPortalDashboardProps {
   onOpenEmbedCode: () => void;
   onOpenTelegram: () => void;
   onSwitchToHistory: () => void;
+  onJumpToCreateInvoice?: () => void;
+  onJumpToInventory?: () => void;
   onTestTipFlow: (amount: number, asset: AssetType, message: string) => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
@@ -110,6 +113,8 @@ export const MerchantPortalDashboard: React.FC<MerchantPortalDashboardProps> = (
   onOpenEmbedCode,
   onOpenTelegram,
   onSwitchToHistory,
+  onJumpToCreateInvoice,
+  onJumpToInventory,
   onTestTipFlow,
   searchQuery,
   onSearchChange,
@@ -358,19 +363,41 @@ export const MerchantPortalDashboard: React.FC<MerchantPortalDashboardProps> = (
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => setShowNewInvoiceModal(true)}
-            className="apple-pressable px-4 py-2 rounded-[10px] bg-[#007AFF] dark:bg-[#0A84FF] hover:opacity-95 text-white sf-footnote font-semibold flex items-center gap-1.5 shadow-xs whitespace-nowrap"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>New Paylink Invoice</span>
-          </button>
+          {onJumpToCreateInvoice ? (
+            <button
+              type="button"
+              onClick={onJumpToCreateInvoice}
+              className="apple-pressable px-4 py-2 rounded-[10px] bg-[#007AFF] dark:bg-[#0A84FF] hover:opacity-95 text-white sf-footnote font-semibold flex items-center gap-1.5 shadow-xs whitespace-nowrap cursor-pointer"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Create Invoice</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowNewInvoiceModal(true)}
+              className="apple-pressable px-4 py-2 rounded-[10px] bg-[#007AFF] dark:bg-[#0A84FF] hover:opacity-95 text-white sf-footnote font-semibold flex items-center gap-1.5 shadow-xs whitespace-nowrap cursor-pointer"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>New Paylink Invoice</span>
+            </button>
+          )}
+
+          {onJumpToInventory && (
+            <button
+              type="button"
+              onClick={onJumpToInventory}
+              className="apple-pressable px-4 py-2 rounded-[10px] bg-[#F2F2F7] dark:bg-[#1C1C1E] text-black dark:text-white sf-footnote font-semibold flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              <Package className="w-3.5 h-3.5 text-[#007AFF]" />
+              <span>Shelves &amp; Inventory</span>
+            </button>
+          )}
 
           <button
             type="button"
             onClick={onJumpToTipLinks}
-            className="apple-pressable px-4 py-2 rounded-[10px] bg-[#F2F2F7] dark:bg-[#1C1C1E] text-black dark:text-white sf-footnote font-semibold flex items-center gap-1.5 whitespace-nowrap"
+            className="apple-pressable px-4 py-2 rounded-[10px] bg-[#F2F2F7] dark:bg-[#1C1C1E] text-black dark:text-white sf-footnote font-semibold flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5 text-[#007AFF]" />
             <span>Widgets &amp; Paylinks</span>
@@ -1130,8 +1157,15 @@ export const MerchantPortalDashboard: React.FC<MerchantPortalDashboardProps> = (
                               {inv.customerName.charAt(0).toUpperCase()}
                             </div>
                             <div className="min-w-0">
-                              <div className="font-semibold text-black dark:text-white truncate">
-                                {inv.customerHandle}
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-semibold text-black dark:text-white truncate">
+                                  {inv.customerHandle}
+                                </span>
+                                {inv.items && inv.items.length > 0 && (
+                                  <span className="inline-flex items-center px-1.5 py-0.2 rounded-[5px] bg-[#007AFF]/10 text-[#007AFF] text-[10px] font-semibold shrink-0">
+                                    {inv.items.length} item{inv.items.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
                               </div>
                               <div className="sf-caption text-black/55 dark:text-white/55 truncate">
                                 {inv.description}

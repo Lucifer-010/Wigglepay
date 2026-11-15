@@ -28,6 +28,9 @@ import {
   Menu,
   X,
   ChevronDown,
+  Package,
+  Plus,
+  Globe2,
 } from 'lucide-react';
 import {
   Invoice,
@@ -38,10 +41,14 @@ import {
   WebhookDelivery,
   TipLinkCard,
   TipSourceSite,
+  InventoryCategory,
+  InventoryProduct,
   INITIAL_INVOICES,
   INITIAL_WEBHOOKS,
   INITIAL_TIP_LINKS,
   INITIAL_TIP_SOURCES,
+  INITIAL_CATEGORIES,
+  INITIAL_PRODUCTS,
   MERCHANT_IDENTITY,
   generateMemo64Bit,
   generateMultiplexedAddress,
@@ -53,14 +60,65 @@ import { MerchantPortalDashboard } from './components/MerchantPortalDashboard';
 import { TelegramMiniApp } from './components/TelegramMiniApp';
 import { DesignSystemDeliverables } from './components/DesignSystemDeliverables';
 import { TipLinksAndEmbedStudio } from './components/TipLinksAndEmbedStudio';
+import { InventoryManager } from './components/InventoryManager';
+import { InvoiceCreationStudio } from './components/InvoiceCreationStudio';
+import { LandingPage } from './components/LandingPage';
+import { AuthPage } from './components/AuthPage';
+import { WigglePayApi } from './services/api';
+
+function getInitialNav(): UnifiedNavId {
+  if (typeof window === 'undefined') return 'landing';
+  const path = window.location.pathname.replace(/^\//, '').toLowerCase();
+  const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+  const key = (hash || path) as UnifiedNavId;
+  const validNavs: UnifiedNavId[] = [
+    'landing',
+    'login',
+    'signup',
+    'overview',
+    'create-invoice',
+    'invoices',
+    'inventory',
+    'tiplinks',
+    'embedcode',
+    'widget',
+    'livealerts',
+    'webhooks',
+    'telegram',
+    'specs',
+    'settings',
+  ];
+  if (validNavs.includes(key)) return key;
+  if (window.location.search.includes('invoiceId')) return 'widget';
+  return path === '' ? 'landing' : 'overview';
+}
 
 export default function App() {
   const [darkMode, setDarkMode] = useState<boolean>(false);
-  const [activeNav, setActiveNav] = useState<UnifiedNavId>('overview');
+  const [activeNav, setActiveNav] = useState<UnifiedNavId>(getInitialNav);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState<boolean>(false);
   const [networkMode, setNetworkMode] = useState<'Testnet' | 'Mainnet'>('Mainnet');
   const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
+
+  // URL-synchronized router navigation
+  const navigateTo = useCallback((navId: UnifiedNavId | string) => {
+    const cleanId = (navId.replace(/^\//, '') || 'landing') as UnifiedNavId;
+    setActiveNav(cleanId);
+    const targetPath = cleanId === 'landing' ? '/' : `/${cleanId}`;
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
+    }
+  }, []);
+
+  // Listen to browser Back / Forward buttons
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveNav(getInitialNav());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Shared Reactive Data Stores
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
@@ -68,6 +126,59 @@ export default function App() {
   const [webhooks, setWebhooks] = useState<WebhookDelivery[]>(INITIAL_WEBHOOKS);
   const [tipLinks, setTipLinks] = useState<TipLinkCard[]>(INITIAL_TIP_LINKS);
   const [tipSources, setTipSources] = useState<TipSourceSite[]>(INITIAL_TIP_SOURCES);
+  const [categories, setCategories] = useState<InventoryCategory[]>(INITIAL_CATEGORIES);
+  const [products, setProducts] = useState<InventoryProduct[]>(INITIAL_PRODUCTS);
+
+  // Sync Categories & Products from Backend API on mount
+  useEffect(() => {
+    async function syncBackendInventory() {
+      try {
+        const [apiCats, apiProds] = await Promise.all([
+          WigglePayApi.getCategories(),
+          WigglePayApi.getProducts(),
+        ]);
+        if (apiCats && apiCats.length > 0) {
+          setCategories(
+            apiCats.map((c) => ({
+              id: c.id,
+              name: c.name,
+              slug: c.slug,
+              icon: c.icon || 'Package',
+              color: c.color || '#007AFF',
+              description: c.description,
+              display_order: c.display_order,
+              is_active: c.is_active,
+              products_count: c.products_count,
+            }))
+          );
+        }
+        if (apiProds && apiProds.length > 0) {
+          setProducts(
+            apiProds.map((p) => ({
+              id: p.id,
+              categoryId: p.category,
+              categoryName: p.category_name || 'General Shelf',
+              categoryColor: p.category_color || '#007AFF',
+              title: p.title,
+              sku: p.sku,
+              description: p.description,
+              price: parseFloat(p.price) || 0,
+              currency: (p.currency as AssetType) || 'USDC',
+              stockQuantity: p.stock_quantity,
+              trackStock: p.track_stock,
+              isInStock: p.is_in_stock,
+              badge: p.badge || undefined,
+              isActive: p.is_active,
+              createdAt: p.created_at,
+            }))
+          );
+        }
+      } catch (err) {
+        console.warn('Backend inventory sync fallback to initial data:', err);
+      }
+    }
+    syncBackendInventory();
+  }, []);
 
   // Global Dynamic Island Alert State
   const [activeStreamAlert, setActiveStreamAlert] = useState<StreamAlertEvent | null>(null);
@@ -206,6 +317,24 @@ export default function App() {
       };
       setWebhooks((prev) => [newWebhook, ...prev]);
 
+      // Decrement stock for items attached to this invoice
+      if (target.items && target.items.length > 0) {
+        setProducts((prev) =>
+          prev.map((p) => {
+            const bought = target.items?.find((i) => i.productId === p.id);
+            if (bought) {
+              const newQty = Math.max(0, p.stockQuantity - bought.quantity);
+              return {
+                ...p,
+                stockQuantity: newQty,
+                isInStock: newQty > 0,
+              };
+            }
+            return p;
+          })
+        );
+      }
+
       const cleanName =
         target.customerName.split(' ')[0] ||
         target.customerHandle.replace('@', '');
@@ -252,6 +381,24 @@ export default function App() {
   const handleCreateInvoice = useCallback((newInv: Invoice) => {
     setInvoices((prev) => [newInv, ...prev]);
     setSelectedInvoiceId(newInv.id);
+  }, []);
+
+  const handleAddCategory = useCallback((cat: InventoryCategory) => {
+    setCategories((prev) => [...prev, cat]);
+  }, []);
+
+  const handleAddProduct = useCallback((prod: InventoryProduct) => {
+    setProducts((prev) => [prod, ...prev]);
+  }, []);
+
+  const handleUpdateProductStock = useCallback((productId: string, newStock: number) => {
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === productId
+          ? { ...p, stockQuantity: newStock, isInStock: newStock > 0 }
+          : p
+      )
+    );
   }, []);
 
   const handleDispatchTestWebhook = useCallback(() => {
@@ -327,14 +474,15 @@ export default function App() {
   };
 
   const handleSurfaceShortcut = (surface: EnvironmentSurface) => {
-    if (surface === 'portal') setActiveNav('overview');
-    if (surface === 'widget') setActiveNav('widget');
-    if (surface === 'overlay') setActiveNav('livealerts');
-    if (surface === 'telegram') setActiveNav('telegram');
-    if (surface === 'specs') setActiveNav('specs');
+    if (surface === 'portal') navigateTo('overview');
+    if (surface === 'widget') navigateTo('widget');
+    if (surface === 'overlay') navigateTo('livealerts');
+    if (surface === 'telegram') navigateTo('telegram');
+    if (surface === 'specs') navigateTo('specs');
   };
 
   // Grouped macOS Sonoma/Sequoia Sidebar Navigation Items using SF Symbols 5
+  // Arranged logically by level of importance & grouped by functional domain
   const navGroups: {
     title: string;
     items: {
@@ -345,27 +493,39 @@ export default function App() {
     }[];
   }[] = [
     {
-      title: 'Merchant Portal',
+      title: 'Core Commerce',
       items: [
         { id: 'overview', label: 'Overview', icon: <LayoutGrid className="w-[18px] h-[18px]" /> },
+        { id: 'create-invoice', label: 'Create Invoice', icon: <Plus className="w-[18px] h-[18px]" /> },
+        { id: 'invoices', label: 'History & Ledger', icon: <FileText className="w-[18px] h-[18px]" /> },
+        { id: 'inventory', label: 'Shelves & Inventory', icon: <Package className="w-[18px] h-[18px]" /> },
+      ],
+    },
+    {
+      title: 'Payment Channels',
+      items: [
         { id: 'tiplinks', label: 'Widgets & Paylinks', icon: <Sparkles className="w-[18px] h-[18px]" /> },
         { id: 'embedcode', label: 'Embed Studio', icon: <Code2 className="w-[18px] h-[18px]" /> },
-        { id: 'invoices', label: 'History', icon: <FileText className="w-[18px] h-[18px]" /> },
         {
           id: 'livealerts',
           label: 'Stream Overlays',
           icon: <Radio className="w-[18px] h-[18px]" />,
           badgeCount: unreadAlertsCount,
         },
-        { id: 'webhooks', label: 'Webhooks', icon: <Webhook className="w-[18px] h-[18px]" /> },
-        { id: 'settings', label: 'Settings', icon: <Settings className="w-[18px] h-[18px]" /> },
       ],
     },
     {
-      title: 'HIG Surfaces & Spec',
+      title: 'Integrations & AI',
       items: [
-        { id: 'widget', label: 'Checkout Sheet', icon: <CreditCard className="w-[18px] h-[18px]" /> },
         { id: 'telegram', label: 'Telegram Mini-App', icon: <Mic className="w-[18px] h-[18px]" /> },
+        { id: 'webhooks', label: 'Webhooks & Events', icon: <Webhook className="w-[18px] h-[18px]" /> },
+      ],
+    },
+    {
+      title: 'Platform & Specs',
+      items: [
+        { id: 'widget', label: 'Checkout Demo', icon: <CreditCard className="w-[18px] h-[18px]" /> },
+        { id: 'settings', label: 'Merchant Settings', icon: <Settings className="w-[18px] h-[18px]" /> },
         { id: 'specs', label: 'HIG Design Spec', icon: <Palette className="w-[18px] h-[18px]" /> },
       ],
     },
@@ -388,7 +548,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setActiveNav('overview');
+                navigateTo('landing');
                 if (isMobile) setMobileDrawerOpen(false);
               }}
               className="flex items-center gap-2.5 text-left group cursor-pointer"
@@ -454,7 +614,7 @@ export default function App() {
                       key={item.id}
                       type="button"
                       onClick={() => {
-                        setActiveNav(item.id);
+                        navigateTo(item.id);
                         if (item.id === 'livealerts') {
                           setUnreadAlertsCount(0);
                         }
@@ -553,10 +713,10 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setActiveNav('settings')}
+            onClick={() => navigateTo('login')}
             className={`apple-pressable w-full h-8 px-2.5 rounded-[8px] text-black/55 dark:text-white/55 hover:bg-black/5 dark:hover:bg-white/8 flex items-center ${
               isCollapsed ? 'justify-center' : 'gap-2'
-            } sf-footnote font-medium`}
+            } sf-footnote font-medium cursor-pointer`}
           >
             <LogOut className="w-3.5 h-3.5 shrink-0" />
             {!isCollapsed && <span>Lock Session</span>}
@@ -565,6 +725,44 @@ export default function App() {
       </div>
     );
   };
+
+  // Fullscreen Public Landing Page
+  if (activeNav === 'landing') {
+    return (
+      <>
+        <GlobalDynamicIsland
+          activeAlert={activeStreamAlert}
+          onDismiss={() => setActiveStreamAlert(null)}
+        />
+        <LandingPage
+          onNavigate={(r) => navigateTo(r)}
+          onOpenCheckoutDemo={() => navigateTo('widget')}
+          onTriggerAlertDemo={(amount, asset) => {
+            triggerDynamicIslandAlert({
+              donorName: 'Landing Visitor',
+              donorHandle: '@guest',
+              amount,
+              asset,
+              message: 'Stellar live stream checkout alert preview',
+              txHash: generateStellarTxHash(),
+              ledgerIndex: 54194000,
+            });
+          }}
+        />
+      </>
+    );
+  }
+
+  // Fullscreen Authentication Page (Login / Sign Up)
+  if (activeNav === 'login' || activeNav === 'signup') {
+    return (
+      <AuthPage
+        initialMode={activeNav === 'signup' ? 'signup' : 'login'}
+        onSuccess={(_user) => navigateTo('overview')}
+        onNavigateHome={() => navigateTo('landing')}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#FFFFFF] dark:bg-[#000000] text-black dark:text-white flex transition-colors duration-200">
@@ -713,6 +911,17 @@ export default function App() {
               </span>
             </button>
 
+            {/* Public Storefront Link */}
+            <button
+              type="button"
+              onClick={() => navigateTo('landing')}
+              title="View Public Storefront"
+              className="apple-pressable hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-[#F2F2F7] dark:bg-[#1C1C1E] text-black/70 dark:text-white/70 hover:text-black dark:hover:text-white sf-footnote font-semibold cursor-pointer"
+            >
+              <Globe2 className="w-3.5 h-3.5 text-[#007AFF]" />
+              <span>Storefront</span>
+            </button>
+
             {/* Share Primary Paylink Button */}
             <button
               type="button"
@@ -739,17 +948,43 @@ export default function App() {
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.16 }}
             >
+              {activeNav === 'create-invoice' && (
+                <InvoiceCreationStudio
+                  categories={categories}
+                  products={products}
+                  onCreateInvoice={handleCreateInvoice}
+                  onOpenInCheckoutWidget={(inv) => {
+                    setSelectedInvoiceId(inv.id);
+                    navigateTo('widget');
+                  }}
+                  onSimulateSettle={handleSettleInvoice}
+                />
+              )}
+
+              {activeNav === 'inventory' && (
+                <InventoryManager
+                  categories={categories}
+                  products={products}
+                  onAddCategory={handleAddCategory}
+                  onAddProduct={handleAddProduct}
+                  onUpdateProductStock={handleUpdateProductStock}
+                  onQuickInvoiceProduct={(_prod) => {
+                    navigateTo('create-invoice');
+                  }}
+                />
+              )}
+
               {(activeNav === 'tiplinks' || activeNav === 'embedcode') && (
                 <TipLinksAndEmbedStudio
                   mode={activeNav}
-                  onSwitchMode={(m) => setActiveNav(m)}
+                  onSwitchMode={(m) => navigateTo(m)}
                   tipLinks={tipLinks}
                   tipSources={tipSources}
                   onCreateTipLink={handleSaveTipLink}
                   onDeleteTipLink={handleDeleteTipLink}
                   onSetPrimaryTipLink={handleSetPrimaryTipLink}
                   onTestTipFlow={handleTestTipFlow}
-                  onOpenFullCheckoutWidget={() => setActiveNav('widget')}
+                  onOpenFullCheckoutWidget={() => navigateTo('widget')}
                 />
               )}
 
@@ -764,16 +999,18 @@ export default function App() {
                   activeView={activeNav}
                   onOpenInvoiceInWidget={(inv) => {
                     setSelectedInvoiceId(inv.id);
-                    setActiveNav('widget');
+                    navigateTo('widget');
                   }}
                   onSettleInvoice={handleSettleInvoice}
                   onExpireInvoice={handleExpireInvoice}
                   onCreateInvoice={handleCreateInvoice}
                   onDispatchTestWebhook={handleDispatchTestWebhook}
-                  onJumpToTipLinks={() => setActiveNav('tiplinks')}
-                  onOpenEmbedCode={() => setActiveNav('embedcode')}
-                  onOpenTelegram={() => setActiveNav('telegram')}
-                  onSwitchToHistory={() => setActiveNav('invoices')}
+                  onJumpToTipLinks={() => navigateTo('tiplinks')}
+                  onOpenEmbedCode={() => navigateTo('embedcode')}
+                  onOpenTelegram={() => navigateTo('telegram')}
+                  onSwitchToHistory={() => navigateTo('invoices')}
+                  onJumpToCreateInvoice={() => navigateTo('create-invoice')}
+                  onJumpToInventory={() => navigateTo('inventory')}
                   onTestTipFlow={handleTestTipFlow}
                   searchQuery={searchQuery}
                   onSearchChange={setSearchQuery}
@@ -805,12 +1042,12 @@ export default function App() {
                   onCreateInvoice={handleCreateInvoice}
                   onOpenInWidget={(inv) => {
                     setSelectedInvoiceId(inv.id);
-                    setActiveNav('widget');
+                    navigateTo('widget');
                   }}
                   onSimulateInstantSettle={(inv) => {
                     handleSettleInvoice(inv.id);
                   }}
-                  onBackToPortal={() => setActiveNav('overview')}
+                  onBackToPortal={() => navigateTo('overview')}
                 />
               )}
 
@@ -830,10 +1067,10 @@ export default function App() {
         {(
           [
             { id: 'overview', label: 'Overview', icon: <LayoutGrid className="w-5 h-5" /> },
-            { id: 'tiplinks', label: 'Widgets', icon: <Sparkles className="w-5 h-5" /> },
-            { id: 'widget', label: 'Checkout', icon: <CreditCard className="w-5 h-5" /> },
-            { id: 'livealerts', label: 'Overlays', icon: <Radio className="w-5 h-5" /> },
-            { id: 'telegram', label: 'Telegram', icon: <Mic className="w-5 h-5" /> },
+            { id: 'create-invoice', label: 'Invoicing', icon: <Plus className="w-5 h-5" /> },
+            { id: 'inventory', label: 'Inventory', icon: <Package className="w-5 h-5" /> },
+            { id: 'invoices', label: 'History', icon: <FileText className="w-5 h-5" /> },
+            { id: 'tiplinks', label: 'Paylinks', icon: <Sparkles className="w-5 h-5" /> },
           ] as { id: UnifiedNavId; label: string; icon: React.ReactNode }[]
         ).map((tab) => {
           const active =
@@ -843,7 +1080,7 @@ export default function App() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveNav(tab.id)}
+              onClick={() => navigateTo(tab.id)}
               className={`flex flex-col items-center justify-center min-w-[56px] py-1 rounded-[10px] transition-colors ${
                 active
                   ? 'text-[#007AFF] dark:text-[#0A84FF] font-semibold'
@@ -904,7 +1141,7 @@ export default function App() {
                       key={item.id}
                       type="button"
                       onClick={() => {
-                        setActiveNav(item.id);
+                        navigateTo(item.id);
                         setCommandPaletteOpen(false);
                       }}
                       className="w-full px-3 py-2 rounded-[10px] hover:bg-[#007AFF] hover:text-white flex items-center justify-between transition-colors"

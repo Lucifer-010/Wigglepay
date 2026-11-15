@@ -9,6 +9,7 @@ from drf_spectacular.views import (
 )
 
 from apps.merchants.views import MerchantViewSet
+from apps.inventory.views import CategoryViewSet, ProductViewSet
 from apps.invoices.views import InvoiceViewSet
 from apps.transactions.views import TransactionViewSet
 from apps.widgets.views import WidgetConfigViewSet, StreamOverlayViewSet, serve_widget_js
@@ -18,6 +19,8 @@ from apps.stellar_engine.services.soroban_bridge import SorobanEscrowBridge
 
 router = DefaultRouter()
 router.register(r'merchants', MerchantViewSet, basename='merchant')
+router.register(r'inventory/categories', CategoryViewSet, basename='inventory-category')
+router.register(r'inventory/products', ProductViewSet, basename='inventory-product')
 router.register(r'invoices', InvoiceViewSet, basename='invoice')
 router.register(r'transactions', TransactionViewSet, basename='transaction')
 router.register(r'widgets', WidgetConfigViewSet, basename='widget')

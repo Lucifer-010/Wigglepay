@@ -66,7 +66,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
         tx_hash = data.get('tx_hash') or secrets.token_hex(32)
         amount = data.get('amount') or invoice.expected_amount
-        sender = data.get('sender') or 'GBSIMULATEDPAYER7777777777777777777777777777777777777777777'
+        sender = data.get('sender') or 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'
 
         # Create Transaction Record for replay protection & ledger audit
         tx_record, _ = TransactionRecord.objects.get_or_create(

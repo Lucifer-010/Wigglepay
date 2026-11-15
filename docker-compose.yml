@@ -181,8 +181,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - VITE_API_URL=http://localhost:8000
-      - VITE_WS_URL=ws://localhost:8001
+      - VITE_API_URL=http://web:8000
+      - VITE_WS_URL=ws://channels:8001
 
   # ----------------------------------------------------------------------------
   # 11. NGINX Reverse Proxy Gateway
